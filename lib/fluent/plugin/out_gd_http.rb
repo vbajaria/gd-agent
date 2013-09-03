@@ -1,7 +1,5 @@
-require 'json'
-
 class Fluent::HTTPOutput < Fluent::Output
-  Fluent::Plugin.register_output('gd-agent-http', self)
+  Fluent::Plugin.register_output('gd-out-http', self)
 
   def initialize
     super
@@ -32,7 +30,8 @@ class Fluent::HTTPOutput < Fluent::Output
       raise ConfigError, "'endpoint' parameter is required on gd-agent-http output"
     end
 
-    @beacon_url = 'http://beacon.grepdata.com/v1/%s?token=%s&q=%s&t=%s'
+    @beacon_url = 'http://beacon.grepdata.com/v1/%s' % [@endpoint]
+    @query_string = '?token=%s&q=%s&t=%s'
   end
 
   # This method is called when starting.
@@ -62,18 +61,43 @@ class Fluent::HTTPOutput < Fluent::Output
     send_request(req, uri)
   end
 
-  def create_request(tag, time, record)
-    url = format_url(tag, time, record)
-    uri = URI.parse(url)
+  def create_request(tag, time, record) 
     if @http_method == 'get'
-       req = Net::HTTP.const_get(@http_method.to_s.capitalize).new(uri.path)
-    else
-      # POST not implemented... 
+      url = @beacon_url + format_query_string(tag, time, record)
+    end
+
+    uri = URI.parse(url)
+    req = Net::HTTP.const_get(@http_method.to_s.capitalize).new(uri.path)
+
+    if @http_method == 'post'
+      set_body(req, format_query_string(tag, time, record))
+    end
+
+    return req, uri
+  end
+ 
+  def send_request(req, uri)
+    begin
+      res = Net::HTTP.new(uri.host, uri.port).start {|http| http.request(req) }
+    rescue IOError, EOFError, SystemCallError
+      $log.warn "Net::HTTP.#{req.method.capitalize} raises exception: #{$!.class}, '#{$!.message}'"
+    end
+
+    unless res and res.is_a?(Net::HTTPSuccess)
+      $log.warn "failed to #{req.method} #{uri} (#{res.code} #{res.message} #{res.body})"
     end
   end
 
-  def format_url(tag, time, record)
-    @beacon_url % [@endpoint, @token, record, time]
+  def format_query_string(tag, time, record)
+    @query_string % [@token, record, time.to_time.to_i]
   end
 
+  def format_url()
+    @beacon_url % [@endpoint]
+  end
+
+  def set_body(req, formatted_query_string)
+    req.body = formatted_query_string
+    req['Content-Type'] = 'application/x-www-form-urlencoded'
+  end
 end
