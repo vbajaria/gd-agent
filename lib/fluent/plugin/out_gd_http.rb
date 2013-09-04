@@ -1,20 +1,22 @@
-class Fluent::HTTPOutput < Fluent::Output
-  Fluent::Plugin.register_output('gd-out-http', self)
+class GDHttpOutput < Fluent::Output
+  Fluent::Plugin.register_output('out-gd-http', self)
 
   def initialize
     super
     require 'net/http'
     require 'uri'
+    require 'json'
   end
 
   # This method is called before starting.
   def configure(conf)
     super
-    @http_method = if http_methods.include? @http_method.intern
-                    @http_method.intern
-                  else
-                    :get
-                  end
+    
+    @url = conf['url']
+    unless @url
+      @url = 'https://beacon.grepdata.com/v1'
+    end
+
     @http_method = conf['http_method']
     unless @http_method
       raise ConfigError, "'http_method' parameter is required on gd-agent-http output"
@@ -30,7 +32,7 @@ class Fluent::HTTPOutput < Fluent::Output
       raise ConfigError, "'endpoint' parameter is required on gd-agent-http output"
     end
 
-    @beacon_url = 'http://beacon.grepdata.com/v1/%s' % [@endpoint]
+    @beacon_url = '%s/%s' % [@url, @endpoint]
     @query_string = '?token=%s&q=%s&t=%s'
   end
 
@@ -66,8 +68,9 @@ class Fluent::HTTPOutput < Fluent::Output
       url = @beacon_url + format_query_string(tag, time, record)
     end
 
-    uri = URI.parse(url)
-    req = Net::HTTP.const_get(@http_method.to_s.capitalize).new(uri.path)
+    uri = URI.parse(URI.escape(url))
+    $log.info "#{uri.path} #{uri.request_uri}"
+    req = Net::HTTP.const_get(@http_method.to_s.capitalize).new(uri.request_uri)
 
     if @http_method == 'post'
       set_body(req, format_query_string(tag, time, record))
@@ -89,7 +92,11 @@ class Fluent::HTTPOutput < Fluent::Output
   end
 
   def format_query_string(tag, time, record)
-    @query_string % [@token, record, time.to_time.to_i]
+    if time.is_a?(Fixnum)
+      @query_string % [@token, JSON.dump(record), time * 1000]
+    else
+      @query_string % [@token, JSON.dump(record), (time.to_time.to_f * 1000.0).to_i]
+    end
   end
 
   def format_url()
