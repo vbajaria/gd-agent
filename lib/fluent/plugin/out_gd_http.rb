@@ -4,6 +4,7 @@ class GDHttpOutput < Fluent::Output
   def initialize
     super
     require 'net/http'
+    require 'cgi'
     require 'uri'
     require 'json'
   end
@@ -11,7 +12,7 @@ class GDHttpOutput < Fluent::Output
   # This method is called before starting.
   def configure(conf)
     super
-    
+
     @url = conf['url']
     unless @url
       @url = 'https://beacon.grepdata.com/v1'
@@ -63,12 +64,12 @@ class GDHttpOutput < Fluent::Output
     send_request(req, uri)
   end
 
-  def create_request(tag, time, record) 
+  def create_request(tag, time, record)
     if @http_method == 'get'
       url = @beacon_url + format_query_string(tag, time, record)
     end
 
-    uri = URI.parse(URI.escape(url))
+    uri = URI.parse(url)
     $log.info "#{uri.path} #{uri.request_uri}"
     req = Net::HTTP.const_get(@http_method.to_s.capitalize).new(uri.request_uri)
 
@@ -78,24 +79,26 @@ class GDHttpOutput < Fluent::Output
 
     return req, uri
   end
- 
+
   def send_request(req, uri)
     begin
-      res = Net::HTTP.new(uri.host, uri.port).start {|http| http.request(req) }
+      http = Net::HTTP.new(uri.host, uri.port)
+      http.use_ssl = true
+      res = http.start {|http| http.request(req) }
     rescue IOError, EOFError, SystemCallError
       $log.warn "Net::HTTP.#{req.method.capitalize} raises exception: #{$!.class}, '#{$!.message}'"
     end
 
-    unless res and res.is_a?(Net::HTTPSuccess)
+    unless res and res.is_a?(Net::HTTPNoContent)
       $log.warn "failed to #{req.method} #{uri} (#{res.code} #{res.message} #{res.body})"
     end
   end
 
   def format_query_string(tag, time, record)
     if time.is_a?(Fixnum)
-      @query_string % [@token, JSON.dump(record), time * 1000]
+      @query_string % [@token, CGI::escape(JSON.dump(record)), time * 1000]
     else
-      @query_string % [@token, JSON.dump(record), (time.to_time.to_f * 1000.0).to_i]
+      @query_string % [@token, CGI::escape(JSON.dump(record)), (time.to_time.to_f * 1000.0).to_i]
     end
   end
 
